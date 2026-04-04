@@ -503,20 +503,25 @@
           const link = roomLink(currentRoom);
           shareLinkInput.value = link;
           window.history.replaceState({}, '', link);
-          try {
-            await navigator.clipboard.writeText(link);
-            log(`[call] room created: ${currentRoom}. Invite link copied.`);
-          } catch {
-            log(`[call] room created: ${currentRoom}. Copy link with button.`);
-          }
         } else {
           shareLinkInput.value = roomLink(currentRoom);
           log(`[call] joining room: ${currentRoom}`);
         }
 
+        // Keep media permission calls as the first privileged operations for iPhone Safari.
         await enableSpeaker();
         await enableMicrophone();
         connectSignaling();
+
+        if (createdRoom) {
+          try {
+            await navigator.clipboard.writeText(shareLinkInput.value);
+            log(`[call] room created: ${currentRoom}. Invite link copied.`);
+          } catch {
+            log(`[call] room created: ${currentRoom}. Copy link with button.`);
+          }
+        }
+
         callInitialized = true;
         callBtn.textContent = createdRoom ? 'Waiting For Peer...' : 'Connecting...';
         callBtn.disabled = true;
