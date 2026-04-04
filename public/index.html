@@ -214,15 +214,30 @@
         const localPc = ensurePeerConnection();
 
         if (!localAudioTrack) {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-            },
-            video: false,
-          });
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error('Microphone requires HTTPS and browser mediaDevices support');
+          }
+
+          let stream;
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              },
+              video: false,
+            });
+          } catch (error) {
+            log(`[voice] advanced audio constraints failed, retrying basic capture: ${error.message}`);
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          }
+
           localAudioTrack = stream.getAudioTracks()[0];
+          localAudioTrack.contentHint = 'speech';
+          localAudioTrack.onmute = () => log('[voice] local mic track muted by browser/device');
+          localAudioTrack.onunmute = () => log('[voice] local mic track unmuted');
+          localAudioTrack.onended = () => log('[voice] local mic track ended');
           await audioSender.replaceTrack(localAudioTrack);
           localAudioTrack.enabled = true;
           micBtn.textContent = 'Mute Mic';
