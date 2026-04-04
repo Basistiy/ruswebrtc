@@ -14,9 +14,10 @@ Then open [http://localhost:8080](http://localhost:8080) in two browser windows/
 ## Test flow
 
 1. In both tabs, click **Connect Signaling**.
-2. In one tab, click **Start as Caller**.
-3. Wait for the data channel to open in both tabs.
-4. Send messages between tabs.
+2. (Voice) In both tabs, click **Enable Mic** and allow microphone access.
+3. In one tab, click **Start as Caller**.
+4. Wait for the data channel to open in both tabs.
+5. Send messages between tabs and speak into the mic.
 
 ## Notes
 

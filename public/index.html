@@ -97,6 +97,7 @@
 
         <div class="row">
           <button id="connectBtn">Connect Signaling</button>
+          <button id="micBtn">Enable Mic</button>
           <button id="startBtn">Start as Caller</button>
         </div>
 
@@ -106,19 +107,25 @@
         </div>
 
         <div id="log"></div>
+        <audio id="remoteAudio" autoplay playsinline controls></audio>
       </div>
     </div>
 
     <script>
       const connectBtn = document.getElementById('connectBtn');
+      const micBtn = document.getElementById('micBtn');
       const startBtn = document.getElementById('startBtn');
       const sendBtn = document.getElementById('sendBtn');
       const messageInput = document.getElementById('messageInput');
       const logEl = document.getElementById('log');
+      const remoteAudioEl = document.getElementById('remoteAudio');
 
       let ws;
       let pc;
+      let audioSender;
+      let remoteAudioStream;
       let dataChannel;
+      let localAudioTrack;
       let peerCount = 0;
       let startedAsCaller = false;
       let signalChain = Promise.resolve();
@@ -162,6 +169,8 @@
         if (pc) return pc;
 
         pc = new RTCPeerConnection(rtcConfig);
+        const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+        audioSender = audioTransceiver.sender;
 
         pc.onicecandidate = (event) => {
           if (event.candidate) {
@@ -178,7 +187,38 @@
           attachDataChannelHandlers(dataChannel);
         };
 
+        pc.ontrack = (event) => {
+          if (!remoteAudioStream) {
+            remoteAudioStream = new MediaStream();
+            remoteAudioEl.srcObject = remoteAudioStream;
+          }
+          remoteAudioStream.addTrack(event.track);
+          remoteAudioEl.play().catch(() => {
+            log('[voice] tap audio controls to unmute playback');
+          });
+          log('[voice] remote audio track received');
+        };
+
         return pc;
+      }
+
+      async function toggleMicrophone() {
+        await rtcConfigReady;
+        const localPc = ensurePeerConnection();
+
+        if (!localAudioTrack) {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          localAudioTrack = stream.getAudioTracks()[0];
+          await audioSender.replaceTrack(localAudioTrack);
+          localAudioTrack.enabled = true;
+          micBtn.textContent = 'Mute Mic';
+          log('[voice] microphone enabled');
+          return;
+        }
+
+        localAudioTrack.enabled = !localAudioTrack.enabled;
+        micBtn.textContent = localAudioTrack.enabled ? 'Mute Mic' : 'Unmute Mic';
+        log(localAudioTrack.enabled ? '[voice] microphone unmuted' : '[voice] microphone muted');
       }
 
       async function flushPendingCandidates(localPc) {
@@ -240,6 +280,9 @@
           if (dataChannel) dataChannel.close();
           if (pc) pc.close();
           pc = null;
+          audioSender = null;
+          remoteAudioStream = null;
+          remoteAudioEl.srcObject = null;
           dataChannel = null;
           return;
         }
@@ -358,6 +401,9 @@
       }
 
       connectBtn.addEventListener('click', connectSignaling);
+      micBtn.addEventListener('click', () => {
+        toggleMicrophone().catch((error) => log(`[voice][error] ${error.message}`));
+      });
       startBtn.addEventListener('click', () => {
         startAsCaller().catch((error) => log(`[webrtc][error] ${error.message}`));
       });
