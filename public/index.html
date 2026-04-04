@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simple WebRTC DataChannel Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f7f7;
+        --panel: #ffffff;
+        --border: #d6d6d6;
+        --text: #202124;
+        --muted: #5f6368;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .wrap {
+        max-width: 720px;
+        margin: 24px auto;
+        padding: 0 16px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 16px;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 1.35rem;
+      }
+
+      p {
+        margin: 0 0 12px;
+        color: var(--muted);
+      }
+
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+
+      button,
+      input {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-size: 14px;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      input {
+        flex: 1;
+        min-width: 180px;
+      }
+
+      #log {
+        white-space: pre-wrap;
+        background: #f0f0f0;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        min-height: 180px;
+        max-height: 300px;
+        overflow: auto;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="panel">
+        <h1>WebRTC DataChannel via WebSocket Signaling</h1>
+        <p>
+          Open this page in two different browser windows/tabs. The first peer should click
+          <strong>Start as Caller</strong>.
+        </p>
+
+        <div class="row">
+          <button id="connectBtn">Connect Signaling</button>
+          <button id="startBtn">Start as Caller</button>
+        </div>
+
+        <div class="row">
+          <input id="messageInput" placeholder="Type a message" />
+          <button id="sendBtn">Send</button>
+        </div>
+
+        <div id="log"></div>
+      </div>
+    </div>
+
+    <script>
+      const connectBtn = document.getElementById('connectBtn');
+      const startBtn = document.getElementById('startBtn');
+      const sendBtn = document.getElementById('sendBtn');
+      const messageInput = document.getElementById('messageInput');
+      const logEl = document.getElementById('log');
+
+      let ws;
+      let pc;
+      let dataChannel;
+      let peerCount = 0;
+      let startedAsCaller = false;
+      let signalChain = Promise.resolve();
+      let pendingCandidates = [];
+
+      const params = new URLSearchParams(window.location.search);
+      const turnUrlsParam = params.get('turnUrls');
+      const turnUsername = params.get('turnUsername');
+      const turnCredential = params.get('turnCredential');
+      const turnUrls = turnUrlsParam
+        ? turnUrlsParam
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
+
+      const rtcConfig = {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          ...(turnUrls.length > 0
+            ? [
+                {
+                  urls: turnUrls,
+                  username: turnUsername || '',
+                  credential: turnCredential || '',
+                },
+              ]
+            : []),
+        ],
+      };
+
+      if (turnUrls.length > 0) {
+        log(`[webrtc] TURN enabled: ${turnUrls.join(', ')}`);
+      } else {
+        log('[webrtc] TURN disabled (using STUN only)');
+      }
+
+      function log(message) {
+        logEl.textContent += `${message}\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function sendSignal(type, payload) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          log('[signal] not connected');
+          return;
+        }
+        ws.send(JSON.stringify({ type, payload }));
+      }
+
+      function ensurePeerConnection() {
+        if (pc) return pc;
+
+        pc = new RTCPeerConnection(rtcConfig);
+
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            sendSignal('candidate', event.candidate);
+          }
+        };
+
+        pc.onconnectionstatechange = () => {
+          log(`[webrtc] connection state: ${pc.connectionState}`);
+        };
+
+        pc.ondatachannel = (event) => {
+          dataChannel = event.channel;
+          attachDataChannelHandlers(dataChannel);
+        };
+
+        return pc;
+      }
+
+      async function flushPendingCandidates(localPc) {
+        if (!localPc.remoteDescription) return;
+        while (pendingCandidates.length > 0) {
+          const candidate = pendingCandidates.shift();
+          try {
+            await localPc.addIceCandidate(candidate);
+          } catch (error) {
+            log(`[signal][error] queued addIceCandidate failed: ${error.message}`);
+          }
+        }
+      }
+
+      function attachDataChannelHandlers(channel) {
+        channel.onopen = () => log('[data] channel open');
+        channel.onclose = () => log('[data] channel closed');
+        channel.onmessage = (event) => log(`[peer] ${event.data}`);
+      }
+
+      async function startAsCaller() {
+        if (startedAsCaller) {
+          log('[webrtc] caller already started');
+          return;
+        }
+        if (peerCount < 2) {
+          log('[webrtc] waiting for second peer to connect');
+          return;
+        }
+
+        startedAsCaller = true;
+        const localPc = ensurePeerConnection();
+        dataChannel = localPc.createDataChannel('chat');
+        attachDataChannelHandlers(dataChannel);
+
+        const offer = await localPc.createOffer();
+        await localPc.setLocalDescription(offer);
+        sendSignal('offer', localPc.localDescription);
+        log('[signal] offer sent');
+      }
+
+      async function onSignalMessage(event) {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'welcome') {
+          log(`[signal] connected as peer ${msg.peerId}`);
+          return;
+        }
+
+        if (msg.type === 'peers') {
+          peerCount = msg.count;
+          log(`[signal] peers in room: ${peerCount}`);
+          return;
+        }
+
+        if (msg.type === 'peer-left') {
+          log('[signal] peer disconnected');
+          if (dataChannel) dataChannel.close();
+          if (pc) pc.close();
+          pc = null;
+          dataChannel = null;
+          return;
+        }
+
+        if (msg.type === 'error') {
+          log(`[signal][error] ${msg.message}`);
+          return;
+        }
+
+        const localPc = ensurePeerConnection();
+
+        if (msg.type === 'offer') {
+          log('[signal] offer received');
+          if (localPc.signalingState !== 'stable') {
+            log('[signal] non-stable state, trying rollback');
+            try {
+              await localPc.setLocalDescription({ type: 'rollback' });
+            } catch (error) {
+              log(`[signal][error] rollback failed: ${error.message}`);
+              throw error;
+            }
+          }
+          const remoteOffer =
+            typeof RTCSessionDescription !== 'undefined'
+              ? new RTCSessionDescription(msg.payload)
+              : msg.payload;
+          await localPc.setRemoteDescription(remoteOffer);
+          log('[signal] remote offer applied');
+          await flushPendingCandidates(localPc);
+          log('[signal] pending candidates flushed');
+          const answer = await localPc.createAnswer();
+          log('[signal] local answer created');
+          await localPc.setLocalDescription(answer);
+          log('[signal] local answer applied');
+          sendSignal('answer', localPc.localDescription);
+          log('[signal] offer received, answer sent');
+          return;
+        }
+
+        if (msg.type === 'answer') {
+          const remoteAnswer =
+            typeof RTCSessionDescription !== 'undefined'
+              ? new RTCSessionDescription(msg.payload)
+              : msg.payload;
+          await localPc.setRemoteDescription(remoteAnswer);
+          await flushPendingCandidates(localPc);
+          log('[signal] answer received');
+          return;
+        }
+
+        if (msg.type === 'candidate') {
+          if (!localPc.remoteDescription) {
+            pendingCandidates.push(msg.payload);
+            log('[signal] candidate queued (no remote description yet)');
+            return;
+          }
+          try {
+            const candidate =
+              typeof RTCIceCandidate !== 'undefined'
+                ? new RTCIceCandidate(msg.payload)
+                : msg.payload;
+            await localPc.addIceCandidate(candidate);
+            log('[signal] candidate applied');
+          } catch (error) {
+            log(`[signal][error] addIceCandidate failed: ${error.message}`);
+          }
+        }
+      }
+
+      function connectSignaling() {
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+          log('[signal] already connected or connecting');
+          return;
+        }
+
+        const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+        ws = new WebSocket(`${protocol}://${location.host}/ws`);
+        connectBtn.disabled = true;
+
+        ws.onopen = () => {
+          log('[signal] websocket open');
+          connectBtn.textContent = 'Connected';
+        };
+        ws.onmessage = (event) => {
+          signalChain = signalChain.then(() => onSignalMessage(event)).catch((error) => {
+            log(`[signal][error] ${error.message}`);
+          });
+        };
+        ws.onclose = () => {
+          log('[signal] websocket closed');
+          connectBtn.disabled = false;
+          connectBtn.textContent = 'Connect Signaling';
+          ws = null;
+          peerCount = 0;
+          startedAsCaller = false;
+          pendingCandidates = [];
+        };
+        ws.onerror = () => log('[signal][error] websocket error');
+
+        if (!window.RTCPeerConnection) {
+          log('[webrtc][error] RTCPeerConnection unavailable. Use HTTPS on phone/browser.');
+        }
+      }
+
+      function sendDataMessage() {
+        const text = messageInput.value.trim();
+        if (!text) return;
+        if (!dataChannel || dataChannel.readyState !== 'open') {
+          log('[data] channel not open yet');
+          return;
+        }
+        dataChannel.send(text);
+        log(`[you] ${text}`);
+        messageInput.value = '';
+      }
+
+      connectBtn.addEventListener('click', connectSignaling);
+      startBtn.addEventListener('click', () => {
+        startAsCaller().catch((error) => log(`[webrtc][error] ${error.message}`));
+      });
+      sendBtn.addEventListener('click', sendDataMessage);
+      messageInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          sendDataMessage();
+        }
+      });
+
+      window.addEventListener('beforeunload', () => {
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+          ws.close(1000, 'page unload');
+        }
+      });
+    </script>
+  </body>
+</html>

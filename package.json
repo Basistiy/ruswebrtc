@@ -1,0 +1,25 @@
+{
+  "name": "ruswebrtc",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"No tests configured\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Basistiy/ruswebrtc.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Basistiy/ruswebrtc/issues"
+  },
+  "homepage": "https://github.com/Basistiy/ruswebrtc#readme",
+  "dependencies": {
+    "ws": "^8.20.0"
+  }
+}
