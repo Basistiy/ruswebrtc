@@ -333,6 +333,18 @@
         log('[signal] renegotiation offer sent');
       }
 
+      function ensureLocalAudioSender(localPc) {
+        if (!localAudioTrack) return;
+        const hasAudioSender = localPc
+          .getSenders()
+          .some((sender) => sender.track && sender.track.kind === 'audio');
+        if (!hasAudioSender) {
+          const streamForTrack = localAudioStream || new MediaStream([localAudioTrack]);
+          audioSender = localPc.addTrack(localAudioTrack, streamForTrack);
+          log('[voice] local audio sender added for negotiation');
+        }
+      }
+
       async function startAsCaller() {
         await rtcConfigReady;
         if (startedAsCaller) {
@@ -346,6 +358,7 @@
 
         startedAsCaller = true;
         const localPc = ensurePeerConnection();
+        ensureLocalAudioSender(localPc);
         dataChannel = localPc.createDataChannel('chat');
         attachDataChannelHandlers(dataChannel);
 
@@ -412,6 +425,7 @@
           log('[signal] remote offer applied');
           await flushPendingCandidates(localPc);
           log('[signal] pending candidates flushed');
+          ensureLocalAudioSender(localPc);
           const answer = await localPc.createAnswer();
           log('[signal] local answer created');
           await localPc.setLocalDescription(answer);
