@@ -277,11 +277,13 @@
           await audioSender.replaceTrack(localAudioTrack);
           localAudioTrack.enabled = true;
           log('[voice] microphone enabled');
+          await renegotiateIfNeeded();
           return;
         }
         if (!localAudioTrack.enabled) {
           localAudioTrack.enabled = true;
           log('[voice] microphone unmuted');
+          await renegotiateIfNeeded();
         }
       }
 
@@ -311,6 +313,15 @@
         channel.onopen = () => log('[data] channel open');
         channel.onclose = () => log('[data] channel closed');
         channel.onmessage = (event) => log(`[peer] ${event.data}`);
+      }
+
+      async function renegotiateIfNeeded() {
+        if (!pc || !ws || ws.readyState !== WebSocket.OPEN) return;
+        if (!pc.remoteDescription || pc.signalingState !== 'stable') return;
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        sendSignal('offer', pc.localDescription);
+        log('[signal] renegotiation offer sent');
       }
 
       async function startAsCaller() {
