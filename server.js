@@ -86,7 +86,8 @@ server.on('upgrade', (req) => {
   });
 });
 
-const peers = new Map();
+const rooms = new Map();
+const peerBySocket = new Map();
 let nextPeerId = 1;
 
 function log(event, meta = {}) {
@@ -102,7 +103,22 @@ function sendJson(ws, payload) {
   }
 }
 
-function oppositePeer(peerId) {
+function sanitizeRoom(rawRoom) {
+  const candidate = String(rawRoom || 'default').trim().toLowerCase();
+  const cleaned = candidate.replace(/[^a-z0-9_-]/g, '').slice(0, 64);
+  return cleaned || 'default';
+}
+
+function getRoomPeers(roomId) {
+  if (!rooms.has(roomId)) {
+    rooms.set(roomId, new Map());
+  }
+  return rooms.get(roomId);
+}
+
+function oppositePeer(roomId, peerId) {
+  const peers = rooms.get(roomId);
+  if (!peers) return null;
   for (const [id, ws] of peers.entries()) {
     if (id !== peerId && ws.readyState === ws.OPEN) {
       return ws;
@@ -111,22 +127,42 @@ function oppositePeer(peerId) {
   return null;
 }
 
-function broadcastCount() {
+function peerIdForSocket(roomId, socket) {
+  const peers = rooms.get(roomId);
+  if (!peers) return 'unknown';
+  return [...peers.entries()].find(([, ws]) => ws === socket)?.[0] || 'unknown';
+}
+
+function broadcastCount(roomId) {
+  const peers = rooms.get(roomId);
+  if (!peers) return;
   const count = peers.size;
   for (const ws of peers.values()) {
     sendJson(ws, { type: 'peers', count });
   }
 }
 
-wss.on('connection', (ws) => {
+function removePeer(peerId, roomId) {
+  const peers = rooms.get(roomId);
+  if (!peers) return;
+  peers.delete(peerId);
+  if (peers.size === 0) {
+    rooms.delete(roomId);
+  }
+}
+
+wss.on('connection', (ws, req) => {
   ws.isAlive = true;
   ws.on('pong', () => {
     ws.isAlive = true;
   });
 
+  const parsed = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const roomId = sanitizeRoom(parsed.searchParams.get('room'));
+  const peers = getRoomPeers(roomId);
   const ip = ws._socket?.remoteAddress || 'unknown';
   if (peers.size >= 2) {
-    log('connection.rejected', { reason: 'room_full', ip });
+    log('connection.rejected', { reason: 'room_full', ip, roomId });
     sendJson(ws, { type: 'error', message: 'Room is full (2 peers max).' });
     ws.close(1000, 'Room full');
     return;
@@ -134,33 +170,34 @@ wss.on('connection', (ws) => {
 
   const peerId = String(nextPeerId++);
   peers.set(peerId, ws);
-  log('connection.open', { peerId, ip, peers: peers.size });
+  peerBySocket.set(ws, { peerId, roomId });
+  log('connection.open', { peerId, ip, roomId, peers: peers.size });
 
-  sendJson(ws, { type: 'welcome', peerId });
-  broadcastCount();
+  sendJson(ws, { type: 'welcome', peerId, roomId });
+  broadcastCount(roomId);
 
   ws.on('message', (raw) => {
     let message;
     try {
       message = JSON.parse(raw.toString());
     } catch {
-      log('message.invalid_json', { peerId });
+      log('message.invalid_json', { peerId, roomId });
       sendJson(ws, { type: 'error', message: 'Invalid JSON message.' });
       return;
     }
 
     if (!message || typeof message.type !== 'string') {
-      log('message.malformed', { peerId, message });
+      log('message.malformed', { peerId, roomId, message });
       sendJson(ws, { type: 'error', message: 'Malformed signaling message.' });
       return;
     }
 
-    log('message.in', { peerId, type: message.type });
+    log('message.in', { peerId, roomId, type: message.type });
 
     if (message.type === 'offer' || message.type === 'answer' || message.type === 'candidate') {
-      const other = oppositePeer(peerId);
+      const other = oppositePeer(roomId, peerId);
       if (!other) {
-        log('message.relay_failed', { peerId, type: message.type, reason: 'no_other_peer' });
+        log('message.relay_failed', { peerId, roomId, type: message.type, reason: 'no_other_peer' });
         sendJson(ws, {
           type: 'error',
           message: 'No second peer connected yet.',
@@ -168,8 +205,8 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      const targetPeerId = [...peers.entries()].find(([, sock]) => sock === other)?.[0] || 'unknown';
-      log('message.relay', { fromPeerId: peerId, toPeerId: targetPeerId, type: message.type });
+      const targetPeerId = peerIdForSocket(roomId, other);
+      log('message.relay', { fromPeerId: peerId, toPeerId: targetPeerId, roomId, type: message.type });
       sendJson(other, {
         type: message.type,
         payload: message.payload,
@@ -178,11 +215,13 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    peers.delete(peerId);
-    log('connection.close', { peerId, peers: peers.size });
-    broadcastCount();
+    peerBySocket.delete(ws);
+    removePeer(peerId, roomId);
+    const count = rooms.get(roomId)?.size || 0;
+    log('connection.close', { peerId, roomId, peers: count });
+    broadcastCount(roomId);
 
-    const other = oppositePeer(peerId);
+    const other = oppositePeer(roomId, peerId);
     if (other) {
       sendJson(other, {
         type: 'peer-left',
@@ -191,14 +230,15 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('error', (error) => {
-    log('connection.error', { peerId, error: error.message });
+    log('connection.error', { peerId, roomId, error: error.message });
   });
 });
 
 const heartbeatInterval = setInterval(() => {
-  for (const [peerId, ws] of peers.entries()) {
+  for (const [ws, meta] of peerBySocket.entries()) {
+    const { peerId, roomId } = meta;
     if (ws.isAlive === false) {
-      log('connection.terminate_stale', { peerId });
+      log('connection.terminate_stale', { peerId, roomId });
       ws.terminate();
       continue;
     }

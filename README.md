@@ -13,7 +13,7 @@ Then open [http://localhost:8080](http://localhost:8080) in two browser windows/
 
 ## Test flow
 
-1. In both tabs, click **Connect Signaling**.
+1. In both tabs, set the same **Room ID**, then click **Connect Signaling**.
 2. (Voice) In both tabs, click **Enable Mic** and allow microphone access.
 3. In one tab, click **Start as Caller**.
 4. Wait for the data channel to open in both tabs.
@@ -21,8 +21,9 @@ Then open [http://localhost:8080](http://localhost:8080) in two browser windows/
 
 ## Notes
 
-- This demo keeps one room with max two peers.
+- Each room supports max two peers.
 - Signaling is intentionally simple and forwards `offer`, `answer`, and `candidate` to the other peer.
+- You can share a room link using `?room=<roomId>` (or the **Copy Invite Link** button).
 
 ## TURN support (always on)
 
