@@ -91,17 +91,14 @@
       <div class="panel">
         <h1>WebRTC DataChannel via WebSocket Signaling</h1>
         <p>
-          Open this page in two different browser windows/tabs. The first peer should click
-          <strong>Start as Caller</strong>.
+          Host clicks <strong>Start Call</strong> to create and share invite link. Guest opens link and
+          clicks <strong>Start Call</strong>.
         </p>
 
         <div class="row">
-          <input id="roomInput" value="default" placeholder="Room ID" />
-          <button id="connectBtn">Connect Signaling</button>
+          <button id="callBtn">Start Call</button>
           <button id="copyLinkBtn">Copy Invite Link</button>
-          <button id="speakerBtn">Enable Speaker</button>
-          <button id="micBtn">Enable Mic</button>
-          <button id="startBtn">Start as Caller</button>
+          <input id="shareLinkInput" readonly placeholder="Invite link will appear here" />
         </div>
 
         <div class="row">
@@ -115,14 +112,11 @@
     </div>
 
     <script>
-      const connectBtn = document.getElementById('connectBtn');
+      const callBtn = document.getElementById('callBtn');
       const copyLinkBtn = document.getElementById('copyLinkBtn');
-      const speakerBtn = document.getElementById('speakerBtn');
-      const micBtn = document.getElementById('micBtn');
-      const startBtn = document.getElementById('startBtn');
       const sendBtn = document.getElementById('sendBtn');
       const messageInput = document.getElementById('messageInput');
-      const roomInput = document.getElementById('roomInput');
+      const shareLinkInput = document.getElementById('shareLinkInput');
       const logEl = document.getElementById('log');
       const remoteAudioEl = document.getElementById('remoteAudio');
 
@@ -134,14 +128,19 @@
       let localAudioTrack;
       let peerCount = 0;
       let startedAsCaller = false;
+      let callInitialized = false;
       let signalChain = Promise.resolve();
       let pendingCandidates = [];
       let rtcConfig = null;
       let speakerEnabled = false;
-      let currentRoom = 'default';
+      let currentRoom = '';
+      let createdRoom = false;
       const initialRoomParam = new URLSearchParams(window.location.search).get('room');
       if (initialRoomParam) {
-        roomInput.value = initialRoomParam;
+        currentRoom = initialRoomParam.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 64);
+        if (currentRoom) {
+          shareLinkInput.value = roomLink(currentRoom);
+        }
       }
       const rtcConfigReady = fetch('/rtc-config')
         .then((response) => {
@@ -174,6 +173,16 @@
         ws.send(JSON.stringify({ type, payload }));
       }
 
+      function generateRoomId() {
+        return `room-${Math.random().toString(36).slice(2, 8)}`;
+      }
+
+      function roomLink(room) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('room', room);
+        return url.toString();
+      }
+
       function ensurePeerConnection() {
         if (!rtcConfig) {
           throw new Error('TURN config is not loaded yet');
@@ -183,6 +192,11 @@
         pc = new RTCPeerConnection(rtcConfig);
         const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
         audioSender = audioTransceiver.sender;
+        if (localAudioTrack) {
+          audioSender.replaceTrack(localAudioTrack).catch((error) => {
+            log(`[voice][error] failed to reattach mic: ${error.message}`);
+          });
+        }
 
         pc.onicecandidate = (event) => {
           if (event.candidate) {
@@ -218,10 +232,19 @@
         return pc;
       }
 
-      async function toggleMicrophone() {
-        await rtcConfigReady;
-        const localPc = ensurePeerConnection();
+      function resetLocalAudioTrack() {
+        if (!localAudioTrack) return;
+        localAudioTrack.onmute = null;
+        localAudioTrack.onunmute = null;
+        localAudioTrack.onended = null;
+        try {
+          localAudioTrack.stop();
+        } catch {}
+        localAudioTrack = null;
+      }
 
+      async function enableMicrophone() {
+        await rtcConfigReady;
         if (!localAudioTrack) {
           if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error('Microphone requires HTTPS and browser mediaDevices support');
@@ -247,16 +270,16 @@
           localAudioTrack.onmute = () => log('[voice] local mic track muted by browser/device');
           localAudioTrack.onunmute = () => log('[voice] local mic track unmuted');
           localAudioTrack.onended = () => log('[voice] local mic track ended');
+          const localPc = ensurePeerConnection();
           await audioSender.replaceTrack(localAudioTrack);
           localAudioTrack.enabled = true;
-          micBtn.textContent = 'Mute Mic';
           log('[voice] microphone enabled');
           return;
         }
-
-        localAudioTrack.enabled = !localAudioTrack.enabled;
-        micBtn.textContent = localAudioTrack.enabled ? 'Mute Mic' : 'Unmute Mic';
-        log(localAudioTrack.enabled ? '[voice] microphone unmuted' : '[voice] microphone muted');
+        if (!localAudioTrack.enabled) {
+          localAudioTrack.enabled = true;
+          log('[voice] microphone unmuted');
+        }
       }
 
       async function enableSpeaker() {
@@ -266,8 +289,6 @@
         if (remoteAudioEl.srcObject) {
           await remoteAudioEl.play();
         }
-        speakerBtn.textContent = 'Speaker Enabled';
-        speakerBtn.disabled = true;
         log('[voice] speaker output enabled');
       }
 
@@ -322,6 +343,9 @@
         if (msg.type === 'peers') {
           peerCount = msg.count;
           log(`[signal] peers in room: ${peerCount}`);
+          if (createdRoom && peerCount === 2 && !startedAsCaller) {
+            startAsCaller().catch((error) => log(`[webrtc][error] ${error.message}`));
+          }
           return;
         }
 
@@ -334,6 +358,7 @@
           remoteAudioStream = null;
           remoteAudioEl.srcObject = null;
           dataChannel = null;
+          resetLocalAudioTrack();
           return;
         }
 
@@ -409,19 +434,14 @@
           return;
         }
 
-        currentRoom = roomInput.value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 64) || 'default';
-        roomInput.value = currentRoom;
         const roomUrl = new URL(window.location.href);
         roomUrl.searchParams.set('room', currentRoom);
         window.history.replaceState({}, '', roomUrl.toString());
         const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
         ws = new WebSocket(`${protocol}://${location.host}/ws?room=${encodeURIComponent(currentRoom)}`);
-        connectBtn.disabled = true;
-        roomInput.disabled = true;
 
         ws.onopen = () => {
           log(`[signal] websocket open (room: ${currentRoom})`);
-          connectBtn.textContent = 'Connected';
         };
         ws.onmessage = (event) => {
           signalChain = signalChain.then(() => onSignalMessage(event)).catch((error) => {
@@ -430,13 +450,17 @@
         };
         ws.onclose = () => {
           log('[signal] websocket closed');
-          connectBtn.disabled = false;
-          connectBtn.textContent = 'Connect Signaling';
-          roomInput.disabled = false;
           ws = null;
           peerCount = 0;
           startedAsCaller = false;
           pendingCandidates = [];
+          if (pc) pc.close();
+          pc = null;
+          audioSender = null;
+          remoteAudioStream = null;
+          remoteAudioEl.srcObject = null;
+          dataChannel = null;
+          resetLocalAudioTrack();
         };
         ws.onerror = () => log('[signal][error] websocket error');
 
@@ -458,28 +482,51 @@
       }
 
       async function copyInviteLink() {
-        const room = roomInput.value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 64) || 'default';
-        roomInput.value = room;
-        const url = new URL(window.location.href);
-        url.searchParams.set('room', room);
-        await navigator.clipboard.writeText(url.toString());
-        log(`[signal] invite link copied for room: ${room}`);
+        if (!currentRoom) {
+          throw new Error('Start call first to generate room');
+        }
+        const link = roomLink(currentRoom);
+        shareLinkInput.value = link;
+        await navigator.clipboard.writeText(link);
+        log(`[signal] invite link copied for room: ${currentRoom}`);
       }
 
-      connectBtn.addEventListener('click', connectSignaling);
+      async function startCall() {
+        if (callInitialized) {
+          log('[call] already initialized');
+          return;
+        }
+
+        if (!currentRoom) {
+          currentRoom = generateRoomId();
+          createdRoom = true;
+          const link = roomLink(currentRoom);
+          shareLinkInput.value = link;
+          window.history.replaceState({}, '', link);
+          try {
+            await navigator.clipboard.writeText(link);
+            log(`[call] room created: ${currentRoom}. Invite link copied.`);
+          } catch {
+            log(`[call] room created: ${currentRoom}. Copy link with button.`);
+          }
+        } else {
+          shareLinkInput.value = roomLink(currentRoom);
+          log(`[call] joining room: ${currentRoom}`);
+        }
+
+        await enableSpeaker();
+        await enableMicrophone();
+        connectSignaling();
+        callInitialized = true;
+        callBtn.textContent = createdRoom ? 'Waiting For Peer...' : 'Connecting...';
+        callBtn.disabled = true;
+      }
+
       copyLinkBtn.addEventListener('click', () => {
         copyInviteLink().catch((error) => log(`[signal][error] copy link failed: ${error.message}`));
       });
-      speakerBtn.addEventListener('click', () => {
-        enableSpeaker().catch((error) => {
-          log(`[voice][error] ${error.message}`);
-        });
-      });
-      micBtn.addEventListener('click', () => {
-        toggleMicrophone().catch((error) => log(`[voice][error] ${error.message}`));
-      });
-      startBtn.addEventListener('click', () => {
-        startAsCaller().catch((error) => log(`[webrtc][error] ${error.message}`));
+      callBtn.addEventListener('click', () => {
+        startCall().catch((error) => log(`[call][error] ${error.message}`));
       });
       sendBtn.addEventListener('click', sendDataMessage);
       messageInput.addEventListener('keydown', (event) => {

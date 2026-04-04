@@ -13,17 +13,17 @@ Then open [http://localhost:8080](http://localhost:8080) in two browser windows/
 
 ## Test flow
 
-1. In both tabs, set the same **Room ID**, then click **Connect Signaling**.
-2. (Voice) In both tabs, click **Enable Mic** and allow microphone access.
-3. In one tab, click **Start as Caller**.
-4. Wait for the data channel to open in both tabs.
-5. Send messages between tabs and speak into the mic.
+1. Person A opens the page and clicks **Start Call** once.
+2. Person A gets an invite link (auto-copied) and shares it.
+3. Person B opens the link and clicks **Start Call**.
+4. The room creator automatically becomes caller when peer 2 joins.
+5. Wait for connection and speak (mic/speaker permissions are requested during start).
 
 ## Notes
 
 - Each room supports max two peers.
 - Signaling is intentionally simple and forwards `offer`, `answer`, and `candidate` to the other peer.
-- You can share a room link using `?room=<roomId>` (or the **Copy Invite Link** button).
+- Invite links are room-based (`?room=<roomId>`).
 
 ## TURN support (always on)
 
