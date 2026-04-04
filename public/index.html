@@ -244,7 +244,6 @@
       }
 
       async function enableMicrophone() {
-        await rtcConfigReady;
         if (!localAudioTrack) {
           if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error('Microphone requires HTTPS and browser mediaDevices support');
@@ -270,6 +269,10 @@
           localAudioTrack.onmute = () => log('[voice] local mic track muted by browser/device');
           localAudioTrack.onunmute = () => log('[voice] local mic track unmuted');
           localAudioTrack.onended = () => log('[voice] local mic track ended');
+          log(
+            `[voice] mic track ready state=${localAudioTrack.readyState} enabled=${localAudioTrack.enabled} muted=${localAudioTrack.muted}`
+          );
+          await rtcConfigReady;
           const localPc = ensurePeerConnection();
           await audioSender.replaceTrack(localAudioTrack);
           localAudioTrack.enabled = true;
