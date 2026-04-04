@@ -123,6 +123,7 @@
       let ws;
       let pc;
       let audioSender;
+      let localAudioStream;
       let remoteAudioStream;
       let dataChannel;
       let localAudioTrack;
@@ -190,10 +191,12 @@
         if (pc) return pc;
 
         pc = new RTCPeerConnection(rtcConfig);
-        const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
-        audioSender = audioTransceiver.sender;
+        pc.addTransceiver('audio', { direction: 'recvonly' });
+        audioSender = null;
         if (localAudioTrack) {
-          audioSender.replaceTrack(localAudioTrack).catch((error) => {
+          const streamForTrack = localAudioStream || new MediaStream([localAudioTrack]);
+          audioSender = pc.addTrack(localAudioTrack, streamForTrack);
+          renegotiateIfNeeded().catch((error) => {
             log(`[voice][error] failed to reattach mic: ${error.message}`);
           });
         }
@@ -241,6 +244,7 @@
           localAudioTrack.stop();
         } catch {}
         localAudioTrack = null;
+        localAudioStream = null;
       }
 
       async function enableMicrophone() {
@@ -264,6 +268,7 @@
             stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
           }
 
+          localAudioStream = stream;
           localAudioTrack = stream.getAudioTracks()[0];
           localAudioTrack.contentHint = 'speech';
           localAudioTrack.onmute = () => log('[voice] local mic track muted by browser/device');
@@ -274,7 +279,11 @@
           );
           await rtcConfigReady;
           const localPc = ensurePeerConnection();
-          await audioSender.replaceTrack(localAudioTrack);
+          if (!audioSender) {
+            audioSender = localPc.addTrack(localAudioTrack, localAudioStream);
+          } else {
+            await audioSender.replaceTrack(localAudioTrack);
+          }
           localAudioTrack.enabled = true;
           log('[voice] microphone enabled');
           await renegotiateIfNeeded();
