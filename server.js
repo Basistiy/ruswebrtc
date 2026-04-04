@@ -7,8 +7,30 @@ const { WebSocketServer } = require('ws');
 const PORT = process.env.PORT || 8080;
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const TURN_URLS = (process.env.TURN_URLS || '')
+  .split(',')
+  .map((v) => v.trim())
+  .filter(Boolean);
+const TURN_USERNAME = process.env.TURN_USERNAME || '';
+const TURN_CREDENTIAL = process.env.TURN_CREDENTIAL || '';
+
+function buildRtcConfig(reqHost) {
+  const hostWithoutPort = (reqHost || 'localhost').split(':')[0];
+  const turnUrls = TURN_URLS.length > 0 ? TURN_URLS : [`turn:${hostWithoutPort}:3478`];
+  return {
+    iceServers: [
+      {
+        urls: turnUrls,
+        username: TURN_USERNAME,
+        credential: TURN_CREDENTIAL,
+      },
+    ],
+  };
+}
 
 const server = http.createServer((req, res) => {
+  const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
   log('http.request', {
     method: req.method,
     url: req.url,
@@ -16,7 +38,14 @@ const server = http.createServer((req, res) => {
     ua: req.headers['user-agent'] || 'unknown',
   });
 
-  const requestPath = req.url === '/' ? '/index.html' : req.url;
+  if (parsedUrl.pathname === '/rtc-config') {
+    const rtcConfig = buildRtcConfig(req.headers.host);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(rtcConfig));
+    return;
+  }
+
+  const requestPath = parsedUrl.pathname === '/' ? '/index.html' : parsedUrl.pathname;
   const filePath = path.join(PUBLIC_DIR, requestPath);
 
   if (!filePath.startsWith(PUBLIC_DIR)) {
@@ -184,6 +213,11 @@ wss.on('close', () => {
 
 server.listen(PORT, HOST, () => {
   log('server.listen', { host: HOST, port: Number(PORT), localhostUrl: `http://localhost:${PORT}` });
+  log('turn.config', {
+    turnUrls: TURN_URLS.length > 0 ? TURN_URLS : ['turn:<request-host>:3478'],
+    hasUsername: Boolean(TURN_USERNAME),
+    hasCredential: Boolean(TURN_CREDENTIAL),
+  });
 
   const interfaces = os.networkInterfaces();
   for (const [name, addresses] of Object.entries(interfaces)) {

@@ -123,38 +123,24 @@
       let startedAsCaller = false;
       let signalChain = Promise.resolve();
       let pendingCandidates = [];
-
-      const params = new URLSearchParams(window.location.search);
-      const turnUrlsParam = params.get('turnUrls');
-      const turnUsername = params.get('turnUsername');
-      const turnCredential = params.get('turnCredential');
-      const turnUrls = turnUrlsParam
-        ? turnUrlsParam
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean)
-        : [];
-
-      const rtcConfig = {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          ...(turnUrls.length > 0
-            ? [
-                {
-                  urls: turnUrls,
-                  username: turnUsername || '',
-                  credential: turnCredential || '',
-                },
-              ]
-            : []),
-        ],
-      };
-
-      if (turnUrls.length > 0) {
-        log(`[webrtc] TURN enabled: ${turnUrls.join(', ')}`);
-      } else {
-        log('[webrtc] TURN disabled (using STUN only)');
-      }
+      let rtcConfig = null;
+      const rtcConfigReady = fetch('/rtc-config')
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error(`failed to load rtc config: ${response.status}`);
+          }
+          return response.json();
+        })
+        .then((config) => {
+          rtcConfig = config;
+          const first = Array.isArray(config.iceServers) ? config.iceServers[0] : null;
+          const urls = first && first.urls ? first.urls : [];
+          const displayUrls = Array.isArray(urls) ? urls.join(', ') : String(urls);
+          log(`[webrtc] TURN config loaded: ${displayUrls}`);
+        })
+        .catch((error) => {
+          log(`[webrtc][error] ${error.message}`);
+        });
 
       function log(message) {
         logEl.textContent += `${message}\n`;
@@ -170,6 +156,9 @@
       }
 
       function ensurePeerConnection() {
+        if (!rtcConfig) {
+          throw new Error('TURN config is not loaded yet');
+        }
         if (pc) return pc;
 
         pc = new RTCPeerConnection(rtcConfig);
@@ -211,6 +200,7 @@
       }
 
       async function startAsCaller() {
+        await rtcConfigReady;
         if (startedAsCaller) {
           log('[webrtc] caller already started');
           return;
@@ -259,6 +249,7 @@
           return;
         }
 
+        await rtcConfigReady;
         const localPc = ensurePeerConnection();
 
         if (msg.type === 'offer') {

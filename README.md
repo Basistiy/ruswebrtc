@@ -23,21 +23,23 @@ Then open [http://localhost:8080](http://localhost:8080) in two browser windows/
 - This demo keeps one room with max two peers.
 - Signaling is intentionally simple and forwards `offer`, `answer`, and `candidate` to the other peer.
 
-## TURN support
+## TURN support (always on)
 
-The client always includes Google STUN. To add TURN, pass credentials in the page URL:
+The client now loads TURN config from `server.js` (`/rtc-config`) and always uses that config.
 
-```text
-http://192.168.1.112:8080/?turnUrls=turn:YOUR_TURN_HOST:3478&turnUsername=USER&turnCredential=PASS
+Set these env vars when starting the server:
+
+```bash
+TURN_URLS=turn:YOUR_HOST:3478 TURN_USERNAME=USER TURN_CREDENTIAL=PASS npm start
 ```
 
-For multiple TURN URLs, separate with commas:
+For multiple TURN URLs:
 
-```text
-?turnUrls=turn:host1:3478,turns:host1:5349
+```bash
+TURN_URLS=turn:host1:3478,turns:host1:5349 TURN_USERNAME=USER TURN_CREDENTIAL=PASS npm start
 ```
 
-Both peers should open the page with the same TURN parameters.
+If `TURN_URLS` is not set, server defaults to `turn:<request-host>:3478`.
 
 ### Quick coturn example (static auth)
 
@@ -51,8 +53,8 @@ realm=webrtc.local
 user=testuser:testpass
 ```
 
-Then run coturn and use:
+Then run app server with:
 
-```text
-?turnUrls=turn:YOUR_SERVER_PUBLIC_IP:3478&turnUsername=testuser&turnCredential=testpass
+```bash
+TURN_URLS=turn:YOUR_SERVER_PUBLIC_IP:3478 TURN_USERNAME=testuser TURN_CREDENTIAL=testpass npm start
 ```
