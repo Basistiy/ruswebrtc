@@ -9,7 +9,30 @@ npm install
 npm start
 ```
 
-Then open [http://localhost:8080](http://localhost:8080) in two browser windows/tabs.
+This starts the signaling server on `http://localhost:8080`.
+
+## Flutter frontend
+
+A Flutter client is available in [`flutter_app`](./flutter_app).
+
+1. Run the signaling server from repo root:
+
+```bash
+npm start
+```
+
+2. Run Flutter app:
+
+```bash
+cd flutter_app
+flutter run
+```
+
+3. In the app:
+- Set `Server URL` to your signaling server (for Android emulator use `http://10.0.2.2:8080`).
+- Leave `Room ID` empty on one device to create room.
+- Copy and share room id.
+- Enter the room id on second device and press **Start Call**.
 
 ## Test flow
 
@@ -24,6 +47,7 @@ Then open [http://localhost:8080](http://localhost:8080) in two browser windows/
 - Each room supports max two peers.
 - Signaling is intentionally simple and forwards `offer`, `answer`, and `candidate` to the other peer.
 - Invite links are room-based (`?room=<roomId>`).
+- Flutter app uses room ids directly (no browser invite URL).
 
 ## TURN support (always on)
 
